@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Github, Key, LogOut, Folder, FileCode, ArrowLeft, 
-  Save, Upload, Plus, MoreVertical, X, Check, Loader2, 
+  Save, Upload, Plus, X, Check, Loader2, 
   Search, FileText, Image as ImageIcon, Home, 
-  Globe, Sparkles, Bot, FilePlus
+  Globe, Sparkles, Bot, FilePlus, Trash2, AlertTriangle
 } from 'lucide-react';
 
 // --- Configuration & Constants ---
@@ -27,6 +27,9 @@ const t = {
     cancel: "ยกเลิก",
     save: "บันทึก",
     edit: "แก้ไข",
+    delete: "ลบ",
+    delete_confirm_title: "ยืนยันการลบไฟล์",
+    delete_confirm_msg: "คุณแน่ใจหรือไม่ว่าต้องการลบไฟล์",
     ai_magic: "ให้ AI ช่วยเขียน",
     ai_placeholder: "บอกสิ่งที่ต้องการ (เช่น: สร้างฟอร์ม login html สวยๆ)",
     ai_generating: "AI กำลังคิด...",
@@ -35,9 +38,12 @@ const t = {
     file_name: "ชื่อไฟล์ (เช่น index.html)",
     success_save: "บันทึกเรียบร้อย",
     success_upload: "อัปโหลดสำเร็จ",
+    success_delete: "ลบไฟล์สำเร็จ",
     error_token: "Token ไม่ถูกต้อง",
     error_fetch: "โหลดข้อมูลไม่สำเร็จ",
-    error_ai: "AI ทำงานผิดพลาด โปรดลองใหม่"
+    error_delete: "ลบไฟล์ไม่สำเร็จ",
+    error_ai: "AI ทำงานผิดพลาด โปรดลองใหม่",
+    warning_cannot_undo: "การกระทำนี้ไม่สามารถย้อนกลับได้"
   },
   en: {
     app_name: "GitHub Manager",
@@ -54,6 +60,9 @@ const t = {
     cancel: "Cancel",
     save: "Save",
     edit: "Edit",
+    delete: "Delete",
+    delete_confirm_title: "Confirm Deletion",
+    delete_confirm_msg: "Are you sure you want to delete",
     ai_magic: "Ask AI to Write",
     ai_placeholder: "Describe what you need (e.g., Create a beautiful login form)",
     ai_generating: "AI is thinking...",
@@ -62,9 +71,12 @@ const t = {
     file_name: "File Name (e.g. index.html)",
     success_save: "Saved successfully",
     success_upload: "Upload success",
+    success_delete: "Deleted successfully",
     error_token: "Invalid Token",
     error_fetch: "Failed to fetch data",
-    error_ai: "AI failed, please try again"
+    error_delete: "Failed to delete file",
+    error_ai: "AI failed, please try again",
+    warning_cannot_undo: "This action cannot be undone."
   }
 };
 
@@ -87,7 +99,7 @@ export default function App() {
   
   // Navigation & Data
   const [currentView, setCurrentView] = useState('login'); 
-  const [direction, setDirection] = useState('forward'); // forward, back
+  const [direction, setDirection] = useState('forward');
   const [currentRepo, setCurrentRepo] = useState(null);
   const [currentPath, setCurrentPath] = useState([]);
   const [files, setFiles] = useState([]);
@@ -96,12 +108,13 @@ export default function App() {
   const [currentFile, setCurrentFile] = useState(null); 
   const [editorContent, setEditorContent] = useState('');
   const [isEditing, setIsEditing] = useState(false);
-  const [newFileName, setNewFileName] = useState(''); // For creating new files
+  const [newFileName, setNewFileName] = useState('');
   
   // UI & Loading
   const [isLoading, setIsLoading] = useState(false);
-  const [showActionModal, setShowActionModal] = useState(false); // For + button
+  const [showActionModal, setShowActionModal] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [toast, setToast] = useState(null);
@@ -133,8 +146,6 @@ export default function App() {
   // --- Navigation Helper ---
   const navigateTo = (view, dir = 'forward') => {
     setDirection(dir);
-    // Small delay to allow react to render the animation class change if needed, 
-    // but here we just rely on key changing or state
     setCurrentView(view);
   };
 
@@ -228,18 +239,16 @@ export default function App() {
   };
 
   const createNewFile = () => {
-    setCurrentFile(null); // No existing file
+    setCurrentFile(null);
     setEditorContent('');
     setIsEditing(true);
-    setNewFileName(''); // Will ask user to input
+    setNewFileName('');
     setShowActionModal(false);
     navigateTo('editor', 'forward');
   };
 
   const saveFile = async () => {
     if (!currentRepo) return;
-    
-    // Validate filename if new
     let targetPath = currentFile ? currentFile.path : [...currentPath, newFileName].join('/');
     if (!currentFile && !newFileName) {
       showToast("Please enter a file name", "error");
@@ -270,15 +279,39 @@ export default function App() {
         });
         showToast(txt.success_save);
         setIsEditing(false);
-        // Refresh file list in background
-        if (!currentFile) {
-            // If it was a new file, we might want to go back or stay. Staying is better.
-        }
       } else {
         throw new Error('Save failed');
       }
     } catch (error) {
       showToast(txt.error_fetch, 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const deleteFile = async () => {
+    if (!currentFile || !currentRepo) return;
+    setIsLoading(true);
+    try {
+      const res = await fetch(`https://api.github.com/repos/${currentRepo.full_name}/contents/${currentFile.path}`, {
+        method: 'DELETE',
+        headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `Delete ${currentFile.name} via Mobile App`,
+          sha: currentFile.sha
+        })
+      });
+
+      if (res.ok) {
+        showToast(txt.success_delete);
+        setShowDeleteModal(false);
+        navigateTo('files', 'back');
+        fetchFiles(currentRepo, currentPath); // Refresh list
+      } else {
+        throw new Error('Delete failed');
+      }
+    } catch (error) {
+      showToast(txt.error_delete, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -351,7 +384,7 @@ export default function App() {
 
   // --- Render Helpers ---
   const LoadingOverlay = () => (
-    <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center backdrop-blur-sm animate-in fade-in duration-200">
+    <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center backdrop-blur-sm app-fade-in">
       <div className="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center">
         <Loader2 className="w-8 h-8 animate-spin text-indigo-600 mb-3" />
         <p className="text-gray-600 font-medium text-sm">Loading...</p>
@@ -361,7 +394,7 @@ export default function App() {
 
   const PageContainer = ({ children, className = "" }) => (
     <div className={`min-h-screen bg-slate-50 w-full absolute top-0 left-0 transition-all duration-300 ease-out ${
-      direction === 'forward' ? 'animate-slide-in-right' : 'animate-slide-in-left'
+      direction === 'forward' ? 'app-slide-in-right' : 'app-slide-in-left'
     } ${className}`}>
       {children}
     </div>
@@ -372,16 +405,16 @@ export default function App() {
   // 1. Login View
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-blue-50 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+      <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-blue-50 flex flex-col items-center justify-center p-6 relative overflow-hidden app-font">
+        <style>{styles}</style>
         {isLoading && <LoadingOverlay />}
-        {toast && <div className="fixed top-4 left-4 right-4 z-50 p-4 bg-red-100 text-red-700 rounded-xl shadow-lg border border-red-200 flex items-center gap-2 animate-bounce-in"><X size={18}/>{toast.message}</div>}
+        {toast && <div className="fixed top-4 left-4 right-4 z-50 p-4 bg-red-100 text-red-700 rounded-xl shadow-lg border border-red-200 flex items-center gap-2 app-bounce-in"><X size={18}/>{toast.message}</div>}
         
-        {/* Language Switcher Login */}
         <button onClick={() => setLang(lang === 'th' ? 'en' : 'th')} className="absolute top-6 right-6 p-2 bg-white/50 backdrop-blur rounded-full shadow-sm text-indigo-600">
           <Globe size={20} />
         </button>
 
-        <div className="w-full max-w-sm bg-white/80 backdrop-blur-xl p-8 rounded-[2rem] shadow-2xl border border-white/50 relative z-10 animate-fade-in-up">
+        <div className="w-full max-w-sm bg-white/80 backdrop-blur-xl p-8 rounded-[2rem] shadow-2xl border border-white/50 relative z-10 app-fade-in-up">
           <div className="flex justify-center mb-6">
             <div className="w-20 h-20 bg-gradient-to-br from-indigo-600 to-violet-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-200 transform -rotate-3">
               <Github className="text-white w-12 h-12" />
@@ -426,9 +459,10 @@ export default function App() {
   // 2. Repositories View
   if (currentView === 'repos') {
     return (
-      <PageContainer>
+      <PageContainer className="app-font">
+        <style>{styles}</style>
         {isLoading && <LoadingOverlay />}
-        {toast && <div className="fixed top-4 inset-x-4 z-50 p-3 bg-slate-800 text-white rounded-lg shadow-xl text-center text-sm animate-fade-in-down">{toast.message}</div>}
+        {toast && <div className="fixed top-4 inset-x-4 z-50 p-3 bg-slate-800 text-white rounded-lg shadow-xl text-center text-sm app-fade-in-down">{toast.message}</div>}
 
         <header className="bg-white/80 backdrop-blur-md px-6 pt-12 pb-4 sticky top-0 z-20 border-b border-slate-100">
           <div className="flex justify-between items-center mb-6">
@@ -465,7 +499,7 @@ export default function App() {
             <div 
               key={repo.id}
               onClick={() => fetchFiles(repo)}
-              className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 active:scale-[0.98] transition-all cursor-pointer flex items-center justify-between group hover:shadow-md"
+              className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 active:scale-[0.98] transition-all cursor-pointer flex items-center justify-between group hover:shadow-md app-fade-in-up"
               style={{ animationDelay: `${i * 0.05}s` }}
             >
               <div className="flex items-center gap-4 min-w-0">
@@ -487,7 +521,8 @@ export default function App() {
   // 3. File Browser View
   if (currentView === 'files') {
     return (
-      <PageContainer>
+      <PageContainer className="app-font">
+        <style>{styles}</style>
         {isLoading && <LoadingOverlay />}
         {toast && <div className="fixed top-4 inset-x-4 z-50 p-3 bg-slate-800 text-white rounded-lg shadow-xl text-center text-sm">{toast.message}</div>}
 
@@ -526,7 +561,7 @@ export default function App() {
             <div 
               key={file.sha}
               onClick={() => file.type === 'dir' ? fetchFiles(currentRepo, [...currentPath, file.name]) : openFile(file)}
-              className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between active:bg-slate-50 cursor-pointer animate-fade-in-up"
+              className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between active:bg-slate-50 cursor-pointer app-fade-in-up"
               style={{ animationDelay: `${i * 0.03}s` }}
             >
               <div className="flex items-center gap-3 min-w-0">
@@ -562,7 +597,7 @@ export default function App() {
         {showActionModal && (
           <div className="fixed inset-0 z-50 flex items-end justify-center">
             <div className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity" onClick={() => setShowActionModal(false)}></div>
-            <div className="bg-white w-full max-w-md rounded-t-[2rem] p-6 relative z-10 animate-slide-up-modal shadow-2xl">
+            <div className="bg-white w-full max-w-md rounded-t-[2rem] p-6 relative z-10 app-slide-up-modal shadow-2xl">
               <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-8"></div>
               
               <div className="grid grid-cols-2 gap-4 mb-4">
@@ -597,20 +632,21 @@ export default function App() {
   // 4. Editor View
   if (currentView === 'editor') {
     return (
-      <div className="h-screen flex flex-col bg-white animate-fade-in">
+      <div className="h-screen flex flex-col bg-white app-fade-in app-font">
+        <style>{styles}</style>
         {isLoading && <LoadingOverlay />}
         {toast && <div className="fixed top-4 inset-x-4 z-50 p-3 bg-slate-800 text-white rounded-lg shadow-xl text-center text-sm">{toast.message}</div>}
 
         {/* Editor Header */}
         <header className="bg-white border-b border-slate-100 pt-10 pb-3 px-4 flex items-center justify-between shrink-0 shadow-sm z-20">
-          <div className="flex items-center gap-3 overflow-hidden">
+          <div className="flex items-center gap-2 overflow-hidden flex-1">
             <button 
               onClick={() => navigateTo('files', 'back')}
-              className="p-2 -ml-2 rounded-full hover:bg-slate-100 text-slate-600"
+              className="p-2 -ml-2 rounded-full hover:bg-slate-100 text-slate-600 shrink-0"
             >
               <ArrowLeft size={22} />
             </button>
-            <div className="truncate flex flex-col">
+            <div className="truncate flex flex-col mr-2">
               {currentFile ? (
                  <h2 className="font-bold text-sm text-slate-900 truncate">{currentFile.name}</h2>
               ) : (
@@ -619,13 +655,24 @@ export default function App() {
                     value={newFileName}
                     onChange={(e) => setNewFileName(e.target.value)}
                     placeholder={txt.file_name}
-                    className="font-bold text-sm text-slate-900 placeholder:text-slate-400 bg-transparent outline-none border-b border-transparent focus:border-indigo-500 w-48"
+                    className="font-bold text-sm text-slate-900 placeholder:text-slate-400 bg-transparent outline-none border-b border-transparent focus:border-indigo-500 w-full"
                  />
               )}
             </div>
           </div>
           
-          <div className="flex gap-2">
+          <div className="flex gap-1.5 shrink-0">
+             {/* Delete Button (Only for existing files) */}
+             {currentFile && currentFile.sha && (
+                <button 
+                    onClick={() => setShowDeleteModal(true)}
+                    className="p-2 text-red-500 hover:bg-red-50 rounded-lg active:scale-95 transition-all"
+                    title={txt.delete}
+                >
+                    <Trash2 size={20} />
+                </button>
+             )}
+
              {/* AI Button */}
              {isEditing && (
                 <button 
@@ -639,14 +686,14 @@ export default function App() {
             {isEditing ? (
               <button 
                 onClick={saveFile}
-                className="px-4 py-2 bg-slate-900 text-white text-sm rounded-lg font-bold flex items-center gap-2 shadow-lg active:scale-95 transition-all"
+                className="px-3 py-2 bg-slate-900 text-white text-sm rounded-lg font-bold flex items-center gap-1.5 shadow-lg active:scale-95 transition-all"
               >
                 <Save size={16} /> {txt.save}
               </button>
             ) : (
               <button 
                 onClick={() => setIsEditing(true)}
-                className="px-4 py-2 bg-indigo-50 text-indigo-600 text-sm rounded-lg font-bold active:bg-indigo-100 transition-colors"
+                className="px-3 py-2 bg-indigo-50 text-indigo-600 text-sm rounded-lg font-bold active:bg-indigo-100 transition-colors"
               >
                 {txt.edit}
               </button>
@@ -669,11 +716,44 @@ export default function App() {
           />
         </div>
 
+        {/* Delete Confirmation Modal */}
+        {showDeleteModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowDeleteModal(false)}></div>
+            <div className="bg-white w-full max-w-sm rounded-3xl p-6 relative z-10 app-bounce-in shadow-2xl text-center">
+              <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertTriangle size={32} />
+              </div>
+              <h3 className="font-bold text-xl text-slate-900 mb-2">{txt.delete_confirm_title}</h3>
+              <p className="text-slate-500 text-sm mb-6">
+                {txt.delete_confirm_msg} <br/>
+                <span className="font-bold text-slate-800">"{currentFile?.name}"</span> ? <br/>
+                <span className="text-red-500 text-xs mt-1 block">{txt.warning_cannot_undo}</span>
+              </p>
+              
+              <div className="grid grid-cols-2 gap-3">
+                <button 
+                  onClick={() => setShowDeleteModal(false)}
+                  className="py-3 bg-slate-100 text-slate-700 rounded-xl font-bold active:scale-95 transition-all"
+                >
+                  {txt.cancel}
+                </button>
+                <button 
+                  onClick={deleteFile}
+                  className="py-3 bg-red-600 text-white rounded-xl font-bold active:scale-95 transition-all shadow-lg shadow-red-200"
+                >
+                  {txt.delete}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* AI Modal */}
         {showAiModal && (
             <div className="fixed inset-0 z-50 flex items-end justify-center">
                 <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowAiModal(false)}></div>
-                <div className="bg-white w-full rounded-t-[2rem] p-6 relative z-10 animate-slide-up-modal">
+                <div className="bg-white w-full rounded-t-[2rem] p-6 relative z-10 app-slide-up-modal">
                     <div className="flex items-center gap-2 mb-4 text-indigo-600">
                         <Bot size={24} />
                         <h3 className="font-bold text-lg">{txt.ai_magic}</h3>
@@ -703,5 +783,40 @@ export default function App() {
 
   return null;
 }
+
+// --- Inline Styles & Keyframes ---
+const styles = `
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+Thai:wght@300;400;500;600;700&display=swap');
+
+  .app-font {
+    font-family: 'Inter', 'Noto Sans Thai', sans-serif;
+  }
+
+  /* Scrollbar Hide */
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+  /* Animations Keyframes */
+  @keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  @keyframes slideInLeft { from { transform: translateX(-30%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  @keyframes slideUpModal { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes fadeInDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes bounceIn { 
+    0% { transform: scale(0.9); opacity: 0; } 
+    50% { transform: scale(1.05); opacity: 1; } 
+    100% { transform: scale(1); } 
+  }
+
+  /* Utility Classes for Animation */
+  .app-slide-in-right { animation: slideInRight 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+  .app-slide-in-left { animation: slideInLeft 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+  .app-slide-up-modal { animation: slideUpModal 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+  .app-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+  .app-fade-in-up { animation: fadeInUp 0.5s ease-out forwards; }
+  .app-fade-in-down { animation: fadeInDown 0.3s ease-out forwards; }
+  .app-bounce-in { animation: bounceIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+`;
 
 
